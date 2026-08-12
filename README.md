@@ -1,6 +1,6 @@
 # LangGraph Chatbot with Multiple Tools
 
-A stateful, tool-augmented conversational agent built using **LangGraph**, **LangChain**, and **ChatGroq**. This project demonstrates how an LLM dynamically decides when to invoke external tools (ArXiv, Wikipedia, Tavily Web Search) to answer complex or real-time user queries.
+A stateful, tool-augmented conversational agent built using **LangGraph**, **LangChain**, and **ChatGroq**. This project demonstrates how an LLM dynamically decides when to invoke external tools (ArXiv, Wikipedia, Tavily Web Search) to answer complex or real-time user queries using a **ReAct (Reason + Act)** architecture loop.
 
 ---
 
@@ -123,7 +123,9 @@ Uses LangGraph's prebuilt `ToolNode(tools)` component, which automatically detec
 
 ---
 
-### 5. Graph Assembly & Conditional Edges
+### 5. Graph Assembly & ReAct Architecture
+
+Instead of terminating immediately after a tool call, the **ReAct (Reason + Act)** architecture routes execution from the `tools` node back to `tool_calling_llm`. This enables dynamic feedback loops, iterative reasoning, and multi-step tool execution.
 
 ```python
 from langgraph.graph import END, START, StateGraph
@@ -131,26 +133,60 @@ from langgraph.prebuilt import ToolNode, tools_condition
 
 builder = StateGraph(State)
 
-# Add Nodes
+# 1. Add Nodes
 builder.add_node("tool_calling_llm", tool_calling_llm)
 builder.add_node("tools", ToolNode(tools))
 
-# Schedule Edges
+# 2. Schedule Flow with Edges (ReAct Loop)
 builder.add_edge(START, "tool_calling_llm")
-builder.add_conditional_edges("tool_calling_llm", tools_condition)
-builder.add_edge("tools", END)
+builder.add_conditional_edges(
+    "tool_calling_llm",
+    # If assistant message has tool_calls -> routes to "tools"
+    # If no tool_calls -> routes to END
+    tools_condition,
+)
 
-# Compile Graph
+# ReAct Edge: Loop tool outputs back to LLM for multi-step reasoning
+builder.add_edge("tools", "tool_calling_llm")
+
+# 3. Compile Graph
 graph = builder.compile()
 ```
 
 - **`tools_condition` Router**: A prebuilt conditional edge function.
   - If the last message from `tool_calling_llm` contains a `tool_calls` request $\rightarrow$ routes execution to `"tools"`.
   - If no tool call was requested $\rightarrow$ routes execution directly to `END`.
+- **Cyclic Edge (`tools` $\rightarrow$ `tool_calling_llm`)**: Creates a feedback loop where tool execution outputs (`ToolMessage`) are passed back to the LLM so it can evaluate results, trigger additional tools if required, or formulate a final response.
 
 ---
 
-### 6. Executing the Chatbot & Displaying Output
+### 6. ReAct Agent Loop & Multi-Step Reasoning Example
+
+The ReAct loop enables the chatbot to break down complex multi-part queries and invoke different tools sequentially across cycles in a single execution.
+
+#### Example Prompt (Multi-Tool Call):
+```python
+messages = graph.invoke({
+    "messages": (
+        "Hey What is ai? and then please tell me the recent research papers on"
+        " quantam computing?"
+    )
+})
+
+for m in messages["messages"]:
+  m.pretty_print()
+```
+
+#### Step-by-Step Execution Sequence:
+1. **Initial Reason**: LLM receives the prompt, recognizes the question asking for general AI concepts, and issues a tool call for `wikipedia` (`query: "Artificial Intelligence"`).
+2. **Tool Execution**: `ToolNode` runs Wikipedia search $\rightarrow$ passes result back to `tool_calling_llm`.
+3. **Iterative Reason**: LLM reads the Wikipedia output, addresses the second part of the prompt, and issues a tool call for `arxiv` (`query: "quantum computing recent advances"`).
+4. **Tool Execution**: `ToolNode` runs ArXiv search $\rightarrow$ passes result back to `tool_calling_llm`.
+5. **Final Output**: LLM synthesizes all retrieved context, determines no further tool calls are required, and outputs the final response (`tools_condition` routes to `END`).
+
+---
+
+### 7. Executing the Chatbot & Displaying Output
 
 Pass user queries as initial messages to `graph.invoke()`, and inspect formatted output using `.pretty_print()`:
 
