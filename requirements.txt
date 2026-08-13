@@ -7,3 +7,7 @@ python-dotenv
 langchain-groq
 arxiv>=2.0.0
 wikipedia
+langsmith
+langchain-tavily
+mcp
+langchain-mcp-adapters

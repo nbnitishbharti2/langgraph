@@ -1,216 +1,369 @@
-# LangGraph Chatbot with Multiple Tools
+# 🚀 LangGraph & Model Context Protocol (MCP) Master Guide
 
-A stateful, tool-augmented conversational agent built using **LangGraph**, **LangChain**, and **ChatGroq**. This project demonstrates how an LLM dynamically decides when to invoke external tools (ArXiv, Wikipedia, Tavily Web Search) to answer complex or real-time user queries using a **ReAct (Reason + Act)** architecture loop.
-
----
-
-## 📐 Architecture & Workflow Diagram
-
-![LangGraph Chatbot Workflow](assets/langgraph_chatbot_tools_workflow.png)
+A comprehensive guide and reference implementation for **LangGraph**, **LangChain**, and the **Model Context Protocol (MCP)**. This repository showcases stateful conversational agents, ReAct (Reason + Act) loop architectures, memory checkpointing, real-time streaming, Human-in-the-Loop (HITL) workflows, and multi-server MCP tool integration.
 
 ---
 
-## 📓 Source Notebook
+## 📂 Project Architecture & Folder Overview
 
-The full implementation and step-by-step code execution can be found in:  
-👉 **[langgraph-tools/chatbotmultipletools.ipynb](file:///d:/PHP8.2/htdocs/learning/python-learning/langgraph/langgraph-tools/chatbotmultipletools.ipynb)**
+### Directory Structure
+
+```text
+langgraph/
+├── assets/                                 # Conceptual Architecture Diagrams
+│   ├── mcp_architecture_diagram.png
+│   ├── memory_state_architecture.png
+│   ├── react_loop_architecture.png
+│   └── streaming_hitl_architecture.png
+├── mcp/                                    # MCP & LangGraph Core Modules
+│   ├── mcp-tools/                          # FastMCP Tool Servers
+│   │   ├── mathserver.py                   # Math MCP Server (stdio)
+│   │   └── weather.py                      # Weather MCP Server (stdio / sse)
+│   ├── mcp-client/                         # LangGraph MCP Client
+│   │   └── client.py                       # MultiServerMCPClient & ReAct Agent
+│   ├── basicchatbot.ipynb                  # ReAct, Memory Saver, & Streaming Notebook
+│   ├── humanintheloop.ipynb                # Interrupt & Human Approval (HITL) Notebook
+│   ├── mcpdemolangchain.ipynb              # LangChain MCP Integration Demo
+│   └── README.md                           # Sub-system Documentation
+├── pyproject.toml                          # Project Dependencies & Configuration
+└── requirements.txt                        # Pip Requirements File
+```
 
 ---
 
-## 🚀 Key Concepts Explained
+## 🧱 Block 1: ReAct (Reason + Act) Agent Architecture
 
-### 1. State Management (`State` & `add_messages`)
+The **ReAct (Reason + Act)** pattern enables the agent to dynamically determine when external tools are required, execute those tools, inspect results, and loop back iteratively until a final response is ready.
 
-In LangGraph, the graph state serves as the memory shared between all nodes.
+### 📐 ReAct Loop Architecture Diagram
+
+![ReAct Architecture Diagram](assets/react_loop_architecture.png)
+
+### Key Architecture Components
+
+1. **State Graph Schema (`State`)**: Shared state object carrying conversation history (`messages: Annotated[list, add_messages]`).
+2. **LLM Node (`tool_calling_llm`)**: Invokes the LLM bound with available tools (`llm.bind_tools(tools)`).
+3. **Conditional Router (`tools_condition`)**: 
+   - Routes to `"tools"` if the assistant message contains `tool_calls`.
+   - Routes to `END` if no tool calls are requested.
+4. **Tool Execution Node (`ToolNode`)**: Executes requested tool functions and appends results as `ToolMessage`.
+5. **Feedback Edge (`"tools"` $\rightarrow$ `"tool_calling_llm"`)**: Loops tool outputs back into the LLM node for multi-step reasoning.
+
+### Code Implementation
 
 ```python
-from typing import Annotated
-from langchain_core.messages import AnyMessage
+from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode, tools_condition
 from typing_extensions import TypedDict
 
 
 class State(TypedDict):
-  messages: Annotated[list[AnyMessage], add_messages]
-```
+  messages: Annotated[list, add_messages]
 
-- **`TypedDict`**: Defines the state schema structure.
-- **`add_messages` Reducer**: Specifies how new messages returned by nodes are handled. Instead of overwriting the `messages` list, `add_messages` appends new messages (or updates existing ones by `id`), maintaining full conversation context.
 
----
-
-### 2. Multi-Tool Integration
-
-The chatbot is equipped with three tools to fetch real-world data across different domains:
-
-#### A. ArXiv Research Tool ([ArxivQueryRun](file:///d:/PHP8.2/htdocs/learning/python-learning/langgraph/langgraph-tools/chatbotmultipletools.ipynb#L65-L70))
-Used to query academic preprints and research papers.
-- **Compatibility Patch**: Resolves `AttributeError: 'Search' object has no attribute 'results'` caused by `arxiv>=2.0.0`.
-```python
-import arxiv
-from langchain_community.tools import ArxivQueryRun
-from langchain_community.utilities import ArxivAPIWrapper
-
-# Compatibility patch for arxiv >= 2.0.0
-if not hasattr(arxiv.Search, "results"):
-  arxiv.Search.results = lambda self: arxiv.Client().results(self)
-
-api_wrapper_arxiv = ArxivAPIWrapper(top_k_results=2, doc_content_chars_max=500)
-arxiv_tool = ArxivQueryRun(
-    api_wrapper=api_wrapper_arxiv, description="Query arxiv papers"
-)
-```
-
-#### B. Wikipedia Knowledge Tool ([WikipediaQueryRun](file:///d:/PHP8.2/htdocs/learning/python-learning/langgraph/langgraph-tools/chatbotmultipletools.ipynb#L126-L133))
-Used to query encyclopedic background knowledge.
-- **User-Agent Fix**: Sets a custom `User-Agent` to prevent Wikimedia API from blocking requests with HTTP 403 / `JSONDecodeError`.
-```python
-from langchain_community.tools import WikipediaQueryRun
-from langchain_community.utilities import WikipediaAPIWrapper
-import wikipedia
-
-wikipedia.set_user_agent(
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like"
-    " Gecko) Chrome/120.0.0.0 Safari/537.36"
-)
-
-api_wrapper_wiki = WikipediaAPIWrapper(
-    top_k_results=2, doc_content_chars_max=500
-)
-wiki_tool = WikipediaQueryRun(
-    api_wrapper=api_wrapper_wiki, description="Query wikipedia articles"
-)
-```
-
-#### C. Tavily Real-Time Web Search Tool ([TavilySearchResults](file:///d:/PHP8.2/htdocs/learning/python-learning/langgraph/langgraph-tools/chatbotmultipletools.ipynb#L180-L184))
-Used to query up-to-date real-time web information and news.
-```python
-from langchain_community.tools.tavily_search import TavilySearchResults
-
-tavily_tool = TavilySearchResults()
-tools = [arxiv_tool, wiki_tool, tavily_tool]
-```
-
----
-
-### 3. Binding Tools to LLM (`bind_tools`)
-
-The LLM is initialized via **ChatGroq** (using `qwen/qwen3.6-27b`). We bind our tool definitions to the model using `.bind_tools()`.
-
-```python
-from langchain_groq import ChatGroq
-
-llm = ChatGroq(model="qwen/qwen3.6-27b")
-llm_with_tools = llm.bind_tools(tools=tools)
-```
-
-When user input requires external info, `llm_with_tools` outputs an `AIMessage` containing a `tool_calls` request instead of a standard text response.
-
----
-
-### 4. Defining Nodes & Prebuilt Constructs
-
-#### Agent Node (`tool_calling_llm`)
-A custom node function that calls the LLM with the accumulated message history from `state`:
-
-```python
 def tool_calling_llm(state: State):
   return {"messages": [llm_with_tools.invoke(state["messages"])]}
-```
 
-#### Tool Node (`ToolNode`)
-Uses LangGraph's prebuilt `ToolNode(tools)` component, which automatically detects tool call requests, executes the corresponding tool function (ArXiv, Wikipedia, or Tavily), and appends the result as a `ToolMessage`.
-
----
-
-### 5. Graph Assembly & ReAct Architecture
-
-Instead of terminating immediately after a tool call, the **ReAct (Reason + Act)** architecture routes execution from the `tools` node back to `tool_calling_llm`. This enables dynamic feedback loops, iterative reasoning, and multi-step tool execution.
-
-```python
-from langgraph.graph import END, START, StateGraph
-from langgraph.prebuilt import ToolNode, tools_condition
 
 builder = StateGraph(State)
-
-# 1. Add Nodes
 builder.add_node("tool_calling_llm", tool_calling_llm)
 builder.add_node("tools", ToolNode(tools))
 
-# 2. Schedule Flow with Edges (ReAct Loop)
+# Schedule Edges
 builder.add_edge(START, "tool_calling_llm")
-builder.add_conditional_edges(
-    "tool_calling_llm",
-    # If assistant message has tool_calls -> routes to "tools"
-    # If no tool_calls -> routes to END
-    tools_condition,
-)
+builder.add_conditional_edges("tool_calling_llm", tools_condition)
+builder.add_edge("tools", "tool_calling_llm")  # ReAct Feedback Loop
 
-# ReAct Edge: Loop tool outputs back to LLM for multi-step reasoning
-builder.add_edge("tools", "tool_calling_llm")
-
-# 3. Compile Graph
 graph = builder.compile()
 ```
 
-- **`tools_condition` Router**: A prebuilt conditional edge function.
-  - If the last message from `tool_calling_llm` contains a `tool_calls` request $\rightarrow$ routes execution to `"tools"`.
-  - If no tool call was requested $\rightarrow$ routes execution directly to `END`.
-- **Cyclic Edge (`tools` $\rightarrow$ `tool_calling_llm`)**: Creates a feedback loop where tool execution outputs (`ToolMessage`) are passed back to the LLM so it can evaluate results, trigger additional tools if required, or formulate a final response.
-
 ---
 
-### 6. ReAct Agent Loop & Multi-Step Reasoning Example
+## 🧱 Block 2: Memory & State Checkpointing (`MemorySaver`)
 
-The ReAct loop enables the chatbot to break down complex multi-part queries and invoke different tools sequentially across cycles in a single execution.
+Without memory, stateful graphs reset after every execution. LangGraph provides checkpointer persistence engines (such as `MemorySaver`) to save state snapshots keyed by unique thread IDs.
 
-#### Example Prompt (Multi-Tool Call):
-```python
-messages = graph.invoke({
-    "messages": (
-        "Hey What is ai? and then please tell me the recent research papers on"
-        " quantam computing?"
-    )
-})
+### 📐 Memory & State Architecture Diagram
 
-for m in messages["messages"]:
-  m.pretty_print()
-```
+![Memory Architecture Diagram](assets/memory_state_architecture.png)
 
-#### Step-by-Step Execution Sequence:
-1. **Initial Reason**: LLM receives the prompt, recognizes the question asking for general AI concepts, and issues a tool call for `wikipedia` (`query: "Artificial Intelligence"`).
-2. **Tool Execution**: `ToolNode` runs Wikipedia search $\rightarrow$ passes result back to `tool_calling_llm`.
-3. **Iterative Reason**: LLM reads the Wikipedia output, addresses the second part of the prompt, and issues a tool call for `arxiv` (`query: "quantum computing recent advances"`).
-4. **Tool Execution**: `ToolNode` runs ArXiv search $\rightarrow$ passes result back to `tool_calling_llm`.
-5. **Final Output**: LLM synthesizes all retrieved context, determines no further tool calls are required, and outputs the final response (`tools_condition` routes to `END`).
+### Key Memory Concepts
 
----
+- **Thread Isolation (`thread_id`)**: Every conversation session is isolated using `config={"configurable": {"thread_id": "1"}}`.
+- **`add_messages` Reducer**: Appends new user/assistant/tool messages to the history list without overwriting prior turns.
+- **State Checkpointing**: Automatically updates state checkpoints after every node transition, enabling multi-turn conversation memory.
 
-### 7. Executing the Chatbot & Displaying Output
-
-Pass user queries as initial messages to `graph.invoke()`, and inspect formatted output using `.pretty_print()`:
+### Code Implementation
 
 ```python
-messages = graph.invoke({"messages": "What is today's ai news?"})
-for m in messages["messages"]:
-  m.pretty_print()
+from langgraph.checkpoint.memory import MemorySaver
+
+# Initialize Checkpointer
+memory = MemorySaver()
+
+# Compile Graph with Memory Checkpointer
+graph = builder.compile(checkpointer=memory)
+
+# Multi-Turn Conversation Execution
+config = {"configurable": {"thread_id": "session_101"}}
+
+# Turn 1: User introduces themselves
+graph.invoke({"messages": "Hi, I am Nitish"}, config=config)
+
+# Turn 2: Agent remembers name from checkpointer memory
+response = graph.invoke({"messages": "What is my name?"}, config=config)
+print(response["messages"][-1].content)  # Output: "Your name is Nitish."
 ```
 
 ---
 
-## 🛠️ Environment Configuration
+## 🧱 Block 3: Real-Time Streaming & Human-in-the-Loop (HITL)
 
-Ensure your API keys are defined in a `.env` file at the root of the project:
+LangGraph provides native support for real-time response streaming and human interaction breakpoints (Human-in-the-Loop).
+
+### 📐 Streaming & HITL Architecture Diagram
+
+![Streaming & HITL Architecture Diagram](assets/streaming_hitl_architecture.png)
+
+### Key Streaming & HITL Concepts
+
+1. **Streaming Modes**:
+   - `graph.stream(..., stream_mode="values")`: Emits complete state values after each step.
+   - `graph.stream(..., stream_mode="updates")`: Emits incremental node state updates.
+   - `graph.astream_events(...)`: Emits granular LLM tokens and tool start/end events.
+
+2. **Human-in-the-Loop (`interrupt` & `Command`)**:
+   - **Interrupting (`interrupt`)**: Pauses graph execution during a tool call to ask for human guidance or approval.
+   - **Resuming (`Command(resume=...)`)**: Resumes graph execution from the exact paused node with human feedback data.
+
+### HITL Code Implementation
+
+👉 Notebook Reference: **[mcp/humanintheloop.ipynb](file:///d:/PHP8.2/htdocs/learning/python-learning/langgraph/mcp/humanintheloop.ipynb)**
+
+```python
+from langchain_core.tools import tool
+from langgraph.types import Command, interrupt
+
+
+@tool
+def human_assistance(query: str) -> str:
+  """Request human intervention/approval."""
+  human_response = interrupt({"query": query})
+  return human_response["data"]
+
+
+# Execute graph until interrupt occurs
+config = {"configurable": {"thread_id": "hitl_session"}}
+events = graph.stream(
+    {
+        "messages": (
+            "I need expert guidance for building an AI agent. Request"
+            " assistance."
+        )
+    },
+    config,
+    stream_mode="values",
+)
+
+# Resume execution after human inputs response
+human_reply = (
+    "We recommend checking out LangGraph for building extensible agents."
+)
+resume_command = Command(resume={"data": human_reply})
+events = graph.stream(resume_command, config, stream_mode="values")
+```
+
+---
+
+## 🧱 Block 4: Model Context Protocol (MCP) Integration
+
+The **Model Context Protocol (MCP)** is an open standard designed to decouple AI applications (clients) from tool & data providers (servers).
+
+### 📐 MCP Architecture & Transport Diagram
+
+![MCP Architecture Diagram](assets/mcp_architecture_diagram.png)
+
+### Core MCP Components
+
+- **MCP Tool Servers**: Standalone server processes (built with `FastMCP`) exposing executable functions.
+  - **[mathserver.py](file:///d:/PHP8.2/htdocs/learning/python-learning/langgraph/mcp/mcp-tools/mathserver.py)**: Exposes `add()`, `subtract()`, `multiply()`, `divide()`.
+  - **[weather.py](file:///d:/PHP8.2/htdocs/learning/python-learning/langgraph/mcp/mcp-tools/weather.py)**: Exposes async `weather()` lookup.
+- **MCP Client**: `MultiServerMCPClient` from `langchain-mcp-adapters` connects to servers, aggregates tools, and passes them to LangGraph's `create_react_agent`.
+
+### MCP Client Code Implementation
+
+👉 Script Reference: **[mcp/mcp-client/client.py](file:///d:/PHP8.2/htdocs/learning/python-learning/langgraph/mcp/mcp-client/client.py)**
+
+```python
+import asyncio
+import os
+import sys
+from dotenv import load_dotenv
+from langchain_groq import ChatGroq
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langgraph.prebuilt import create_react_agent
+
+load_dotenv()
+
+math_path = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "mcp/mcp-tools/mathserver.py")
+)
+weather_path = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "mcp/mcp-tools/weather.py")
+)
+
+
+async def main():
+  # Connect to multiple MCP servers via stdio transport
+  client = MultiServerMCPClient({
+      "math": {
+          "command": sys.executable,
+          "args": [math_path],
+          "transport": "stdio",
+      },
+      "weather": {
+          "command": sys.executable,
+          "args": [weather_path],
+          "transport": "stdio",
+      },
+  })
+
+  # Dynamically fetch MCP tools & create ReAct agent
+  tools = await client.get_tools()
+  model = ChatGroq(model="llama-3.3-70b-versatile")
+  agent = create_react_agent(model, tools)
+
+  # Invoke Agent
+  res = await agent.ainvoke(
+      {"messages": [{"role": "user", "content": "what is 2 + 2?"}]}
+  )
+  print("Response:", res["messages"][-1].content)
+
+
+if __name__ == "__main__":
+  asyncio.run(main())
+```
+
+---
+
+## 🧱 Block 5: Transport Layer Architecture Deep-Dive
+
+MCP supports multiple communication protocol layers for client-server interaction. The table below compares the primary transport options:
+
+| Transport Layer | Mechanism | Network Exposure | Best Use Case | Performance & Overhead |
+| :--- | :--- | :--- | :--- | :--- |
+| **Standard I/O (`stdio`)** | Piped `stdin`/`stdout` child processes | Local host process only (Zero network exposure) | Local CLI tools, sandboxed Python scripts, desktop apps | High speed, lowest latency, zero network overhead |
+| **Server-Sent Events (`sse`)** | HTTP GET (SSE stream) + HTTP POST (Tool calls) | Network accessible (HTTP/HTTPS) | Distributed microservices, cloud web services | Moderate latency, HTTP streaming connection |
+
+---
+
+### 1. Standard Input/Output (`stdio`) Transport Layer
+
+#### How `stdio` Transport Works:
+1. The **MCP Client** spawns the **MCP Server** script as a child process using a process launcher (`subprocess`).
+2. Data communication occurs strictly through standard system streams:
+   - **`stdin`**: Client sends JSON-RPC tool invocation requests to the server.
+   - **`stdout`**: Server returns JSON-RPC tool responses to the client.
+   - **`stderr`**: Reserved for logging/error messages.
+3. **Security Benefits**: Sandboxed process execution without exposing open HTTP ports or network sockets.
+
+#### `stdio` Server Code (`mathserver.py`):
+```python
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("Math")
+
+
+@mcp.tool()
+def add(a: int, b: int) -> int:
+  """Add two numbers."""
+  return a + b
+
+
+if __name__ == "__main__":
+  # Runs server listening on stdin/stdout
+  mcp.run(transport="stdio")
+```
+
+---
+
+### 2. Server-Sent Events (`sse`) / HTTP Transport Layer
+
+#### How `sse` Transport Works:
+1. The **MCP Server** runs an asynchronous HTTP server (using Starlette / Uvicorn).
+2. The server exposes two HTTP endpoints:
+   - **SSE Endpoint (`GET /sse`)**: Client establishes a persistent Server-Sent Events stream to receive asynchronous server notifications and tool output events.
+   - **Message Endpoint (`POST /messages/`)**: Client sends JSON-RPC requests containing tool execution calls to the server.
+3. **Use Cases**: Cloud-hosted MCP microservices, multi-client web applications, and remote infrastructure management.
+
+#### `sse` Server Code (`weather.py`):
+```python
+import sys
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("Weather")
+
+
+@mcp.tool()
+async def weather(city: str) -> str:
+  """Get weather of a city."""
+  return f"Weather in {city} is sunny"
+
+
+if __name__ == "__main__":
+  # Launch as HTTP SSE server on http://127.0.0.1:8000/sse when --sse flag is passed
+  transport = "sse" if "--sse" in sys.argv else "stdio"
+  mcp.run(transport=transport)
+```
+
+---
+
+## 🧱 Block 6: Environment Setup & Execution Commands
+
+### 1. Environment Configuration (`.env`)
+
+Create a `.env` file at the root of the project containing your API keys:
 
 ```env
 GROQ_API_KEY=your_groq_api_key
 TAVILY_API_KEY=your_tavily_api_key
 ```
 
-And loaded via `python-dotenv`:
+---
 
-```python
-from dotenv import load_dotenv
+### 2. Package Dependencies (`requirements.txt`)
 
-load_dotenv()
+Install all required dependencies:
+
+```text
+pydantic
+langchain
+langgraph
+langchain-core
+langchain-community
+python-dotenv
+langchain-groq
+arxiv>=2.0.0
+wikipedia
+langsmith
+langchain-tavily
+mcp
+langchain-mcp-adapters
+```
+
+---
+
+### 3. Execution Commands (`uv`)
+
+Always execute Python scripts using **`uv run`** to run inside the project virtual environment (`.venv`):
+
+#### Run MCP Client:
+```powershell
+uv run python .\mcp\mcp-client\client.py
+```
+
+#### Run Weather Server in SSE Mode:
+```powershell
+uv run python .\mcp\mcp-tools\weather.py --sse
 ```
