@@ -46,11 +46,6 @@ LANGCHAIN_PROJECT="TracingProject"
 LANGCHAIN_API_KEY="lsv2_pt_..."
 ```
 
-> [!IMPORTANT]
-> **Gotchas & Best Practices:**
-> - **Spelling Typos:** Ensure the key is spelled **`LANGSMITH_PROJECT`** (not `LANGSMITH_PORJECT`). A typo causes LangSmith to ignore your project name and route all traces into `"default"`.
-> - **Jupyter Kernel Caching:** `load_dotenv()` does **not** overwrite previously loaded environment variables in an active Jupyter Kernel session by default. Always pass `load_dotenv(override=True)` in notebooks.
-
 ---
 
 ## 🧱 2. Jupyter Notebook Observability (`debugging/debugging.ipynb`)
