@@ -13,7 +13,11 @@ __pycache__/
 # Environment & secrets
 .env
 .env.*
+!.env.example
 *.local
+
+# LangGraph CLI dev server cache
+.langgraph_api/
 
 # Jupyter Notebooks
 .ipynb_checkpoints/

@@ -11,3 +11,4 @@ langsmith
 langchain-tavily
 mcp
 langchain-mcp-adapters
+langgraph-cli[inmem]

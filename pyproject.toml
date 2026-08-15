@@ -13,6 +13,7 @@ dependencies = [
     "langchain-mcp-adapters>=0.3.2",
     "langchain-tavily>=0.2.18",
     "langgraph>=1.2.10",
+    "langgraph-cli[inmem]>=0.4.31",
     "langsmith>=0.10.17",
     "mcp>=1.29.0",
     "pydantic>=2.13.4",
