@@ -12,3 +12,10 @@ langchain-tavily
 mcp
 langchain-mcp-adapters
 langgraph-cli[inmem]
+pymupdf
+transformers
+Pillow
+torch
+scikit-learn
+faiss-cpu
+langchain-openai
