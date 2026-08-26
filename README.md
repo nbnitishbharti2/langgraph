@@ -21,7 +21,7 @@ langgraph/
 ## 🧠 Core Pydantic Concepts
 
 ### 1. Pydantic `BaseModel` vs. Standard Python `@dataclass`
-While Python’s standard `@dataclass` allows you to annotate field types, it **does not enforce them** at runtime. If you pass an invalid type, standard dataclasses will accept it without throwing an error.
+Python’s standard `@dataclass` allows you to annotate field types, but it **does not enforce them** at runtime. If you pass an invalid type, standard dataclasses will accept it without throwing an error.
 
 * **Standard Dataclass**:
   ```python
